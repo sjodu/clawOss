@@ -23,8 +23,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw globally
-RUN npm install -g openclaw
+# Install OpenClaw globally and verify installation
+RUN npm install -g openclaw && \
+    ln -sf /usr/local/lib/node_modules/openclaw/bin/openclaw.js /usr/local/bin/openclaw && \
+    chmod +x /usr/local/bin/openclaw && \
+    openclaw --version
 
 # Create app directory
 WORKDIR /app
