@@ -1,0 +1,11 @@
+
+{
+  "claude-code.env": {
+    "ANTHROPIC_BASE_URL": "https://cc-vibe.com",
+    "ANTHROPIC_API_KEY": "sk-a7276debb575cd5a217689d5645c9bfa9d00508eb94e53f7dc93ad40fe7e9876"
+  },
+  "claudeCode.environmentVariables": [
+        { "name": "ANTHROPIC_BASE_URL", "value": "https://cc-vibe.com" },
+        { "name": "ANTHROPIC_AUTH_TOKEN", "value": "sk-a7276debb575cd5a217689d5645c9bfa9d00508eb94e53f7dc93ad40fe7e9876" }
+   ]
+}

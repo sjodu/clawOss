@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Temporary files
+tmp
+temp
+*.tmp
+
+# Documentation (will be copied separately if needed)
+*.md
+!README.md
+
+# Memory data (will be mounted as volume)
+workspace/memory/repos/*
+workspace/memory/issues/*
+workspace/memory/locks/*
+
+# OpenClaw data
+.openclaw

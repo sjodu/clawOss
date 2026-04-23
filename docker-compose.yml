@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  clawoss:
+    build: .
+    container_name: clawoss-agent
+    restart: unless-stopped
+
+    # Environment variables - configure these
+    environment:
+      # LLM Configuration
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-64000}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      LLM_COST_INPUT: ${LLM_COST_INPUT:-0.14}
+      LLM_COST_OUTPUT: ${LLM_COST_OUTPUT:-0.28}
+
+      # Budget Control
+      BUDGET_MAX_USD: ${BUDGET_MAX_USD:-5.0}
+
+      # GitHub Configuration
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_USERNAME: ${GITHUB_USERNAME:-sjodu}
+      GITHUB_EMAIL: ${GITHUB_EMAIL:-1149095175@qq.com}
+
+      # Dashboard (Optional)
+      DASHBOARD_URL: ${DASHBOARD_URL:-https://clawoss-dashboard.vercel.app}
+      CLAW_API_KEY: ${CLAW_API_KEY:-}
+
+    # Volumes for persistence
+    volumes:
+      - openclaw-data:/root/.openclaw
+      - ./workspace/memory:/app/workspace/memory
+      - ./logs:/app/logs
+
+    # Port mapping (optional, for debugging)
+    ports:
+      - "18789:18789"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "openclaw", "gateway", "status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  openclaw-data:
+    driver: local

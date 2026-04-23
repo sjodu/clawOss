@@ -1,0 +1,212 @@
+name: ClawOSS Autonomous Runner
+
+on:
+  # 定时运行（每小时一次，避免快速耗尽免费额度）
+  schedule:
+    - cron: '0 * * * *'  # 每小时整点运行
+
+  # 手动触发
+  workflow_dispatch:
+
+  # Push 到 main 分支时触发（跳过包含 [skip ci] 的提交）
+  push:
+    branches: [ main ]
+
+jobs:
+  run-clawoss:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Cache OpenClaw
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.openclaw
+          key: ${{ runner.os }}-openclaw-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-openclaw-
+
+      - name: Install OpenClaw
+        run: |
+          npm install -g openclaw
+          openclaw --version
+
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq python3 python3-pip
+
+      - name: Configure environment
+        env:
+          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_COST_INPUT: ${{ secrets.LLM_COST_INPUT }}
+          LLM_COST_OUTPUT: ${{ secrets.LLM_COST_OUTPUT }}
+          BUDGET_MAX_USD: ${{ secrets.BUDGET_MAX_USD }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
+          GITHUB_EMAIL: ${{ secrets.GH_EMAIL }}
+        run: |
+          # 创建 .env 文件
+          cat > .env << EOF
+          LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+          LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+          LLM_API_KEY=${LLM_API_KEY}
+          LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
+          LLM_COST_INPUT=${LLM_COST_INPUT:-0.14}
+          LLM_COST_OUTPUT=${LLM_COST_OUTPUT:-0.28}
+          BUDGET_MAX_USD=${BUDGET_MAX_USD:-5.0}
+          GITHUB_TOKEN=${GITHUB_TOKEN}
+          GITHUB_USERNAME=${GITHUB_USERNAME}
+          GITHUB_EMAIL=${GITHUB_EMAIL}
+          EOF
+
+          # 配置 Git
+          git config --global user.name "${GITHUB_USERNAME}"
+          git config --global user.email "${GITHUB_EMAIL}"
+
+          # 认证 GitHub CLI
+          echo "${GITHUB_TOKEN}" | gh auth login --with-token
+
+      - name: Initialize OpenClaw
+        run: |
+          # 创建配置目录
+          mkdir -p ~/.openclaw/workspace
+          mkdir -p ~/.openclaw/logs
+          mkdir -p ~/.openclaw/memory
+
+          # 初始化预算追踪
+          mkdir -p workspace/memory
+          echo "${BUDGET_MAX_USD:-5.0}" > workspace/memory/budget-max.txt
+
+          # 如果预算文件不存在，初始化为 0
+          if [ ! -f workspace/memory/budget-spent.txt ]; then
+            echo "0.0" > workspace/memory/budget-spent.txt
+          fi
+
+      - name: Check budget
+        id: budget_check
+        run: |
+          SPENT=$(cat workspace/memory/budget-spent.txt)
+          MAX=$(cat workspace/memory/budget-max.txt)
+
+          echo "Budget spent: \$${SPENT} / \$${MAX}"
+
+          # 检查是否超出预算
+          if (( $(echo "$SPENT >= $MAX" | bc -l) )); then
+            echo "budget_exceeded=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Budget exhausted! Stopping execution."
+            exit 1
+          else
+            echo "budget_exceeded=false" >> $GITHUB_OUTPUT
+            REMAINING=$(echo "$MAX - $SPENT" | bc)
+            echo "✅ Budget OK. Remaining: \$${REMAINING}"
+          fi
+
+      - name: Generate OpenClaw config
+        run: |
+          bash scripts/restart.sh
+
+      - name: Run ClawOSS agent
+        id: run_agent
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          # 启动 Gateway（后台运行）
+          openclaw gateway start
+
+          # 等待 Gateway 启动
+          sleep 10
+
+          # 检查 Gateway 状态
+          openclaw gateway status
+
+          # 运行 agent（限时 20 分钟）
+          timeout 20m openclaw agent run --workspace workspace || true
+
+      - name: Update budget tracking
+        if: always()
+        run: |
+          # 从 OpenClaw 日志中提取 token 使用量（如果可用）
+          # 这里需要根据实际日志格式调整
+
+          # 简单估算：假设每次运行消耗 $0.01
+          SPENT=$(cat workspace/memory/budget-spent.txt)
+          NEW_SPENT=$(echo "$SPENT + 0.01" | bc)
+          echo "$NEW_SPENT" > workspace/memory/budget-spent.txt
+
+          echo "Updated budget: \$${NEW_SPENT}"
+
+      - name: Commit budget changes
+        if: always()
+        env:
+          GITHUB_EMAIL: ${{ secrets.GH_EMAIL }}
+          GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
+        run: |
+          git config --local user.email "${GITHUB_EMAIL}"
+          git config --local user.name "${GITHUB_USERNAME}"
+
+          # 提交预算变更（使用 [skip ci] 避免触发新的 workflow）
+          git add workspace/memory/budget-spent.txt
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update budget tracking [skip ci]"
+            git push || echo "⚠️ Push failed, budget not synced"
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawoss-logs-${{ github.run_number }}
+          path: |
+            ~/.openclaw/logs/
+            workspace/logs/
+          retention-days: 7
+
+      - name: Report status
+        if: always()
+        env:
+          GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
+        run: |
+          echo "## ClawOSS Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Budget Spent**: \$$(cat workspace/memory/budget-spent.txt)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Budget Max**: \$$(cat workspace/memory/budget-max.txt)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow Duration**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 检查是否有新的 PR
+          RECENT_PRS=$(gh search prs --author ${GITHUB_USERNAME} --state open --limit 5 2>/dev/null || echo "[]")
+          echo "### Recent Open PRs" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "$RECENT_PRS" | jq '.' >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          # 统计总 PR 数
+          TOTAL_PRS=$(gh search prs --author ${GITHUB_USERNAME} --json number 2>/dev/null | jq 'length' || echo "0")
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total PRs**: ${TOTAL_PRS}" >> $GITHUB_STEP_SUMMARY
