@@ -168,11 +168,18 @@ jobs:
           git config --local user.email "${GITHUB_EMAIL}"
           git config --local user.name "${GITHUB_USERNAME}"
 
+          # 确保目录存在
+          mkdir -p workspace/memory
+
           # 提交预算变更（使用 [skip ci] 避免触发新的 workflow）
-          git add workspace/memory/budget-spent.txt
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: update budget tracking [skip ci]"
-            git push || echo "⚠️ Push failed, budget not synced"
+          if [ -f workspace/memory/budget-spent.txt ]; then
+            git add workspace/memory/budget-spent.txt
+            if ! git diff --staged --quiet; then
+              git commit -m "chore: update budget tracking [skip ci]"
+              git push || echo "⚠️ Push failed, budget not synced"
+            fi
+          else
+            echo "⚠️ budget-spent.txt not found, skipping commit"
           fi
 
       - name: Upload logs
