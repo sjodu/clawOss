@@ -1,6 +1,9 @@
 # Dockerfile for ClawOSS V11
 FROM node:20-slim
 
+# Replace with Aliyun mirror for faster downloads in China
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     git \
